@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Speech to Text</title>
+  <style>
+    body {
+      background: #111;
+      color: white;
+      font-family: Arial;
+      padding: 40px;
+    }
+
+    .box {
+      background: #222;
+      padding: 20px;
+      width: 350px;
+      border-radius: 8px;
+    }
+
+    button {
+      background: green;
+      color: white;
+      padding: 10px;
+      border: none;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+
+    #outputText {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #333;
+      padding: 10px;
+      border-radius: 4px;
+      min-height: 20px;
+    }
+
+    #debugLog {
+      margin-top: 20px;
+      padding: 10px;
+      background: #000;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 12px;
+      border: 1px solid #333;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Upload Audio → Convert to Text (DEBUG v2)</h2>
+
+  <div class="box">
+    <form id="uploadForm" onsubmit="return false;">
+      <input type="file" id="fileInput" accept="audio/*" />
+      <br><br>
+      <!-- Changed to type="button" and added onclick. No more form submit! -->
+      <button type="button" onclick="handleUploadClick()">Upload & Convert</button>
+    </form>
+
+    <h3>Result:</h3>
+    <button onclick="clearText()"
+      style="background:#cc0000; font-size:12px; padding:5px 10px; margin-bottom:10px;">Remove Text</button>
+    <p id="outputText">No text yet.</p>
+
+    <button onclick="toggleDebug()" style="background:#555; font-size:10px;">Toggle Debug Logs</button>
+    <div id="debugLog">Debug Logs:<br></div>
+  </div>
+
+  <script>
+    const debugDiv = document.getElementById("debugLog");
+    function logDebug(msg) {
+      console.log(msg);
+      debugDiv.innerHTML += msg + "<br>";
+      debugDiv.style.display = "block";
+    }
+    window.toggleDebug = () => {
+      debugDiv.style.display = debugDiv.style.display === "none" ? "block" : "none";
+    };
+
+    const form = document.getElementById("uploadForm");
+    const fileInput = document.getElementById("fileInput");
+    const output = document.getElementById("outputText");
+    const statusDict = document.createElement("p");
+    statusDict.style.fontWeight = "bold";
+    form.after(statusDict);
+
+    // --- Microphone Logic ---
+    const recordBtn = document.createElement("button");
+    recordBtn.type = "button"; // Prevent form submission
+    recordBtn.innerText = "🎤 Start Recording";
+    recordBtn.style.backgroundColor = "red";
+    recordBtn.style.marginLeft = "10px";
+
+    // Add record button to form
+    form.appendChild(document.createElement("br"));
+    form.appendChild(recordBtn);
+
+    let mediaRecorder;
+    let audioChunks = [];
+
+    recordBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        recordBtn.innerText = "🎤 Start Recording";
+        recordBtn.style.backgroundColor = "red";
+        statusDict.innerText = "Status: Recording stopped. Processing...";
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+          const file = new File([audioBlob], "recording.wav", { type: "audio/wav" });
+          uploadAudio(file);
+        };
+
+        mediaRecorder.start();
+        recordBtn.innerText = "⏹ Stop Recording";
+        recordBtn.style.backgroundColor = "orange";
+        statusDict.innerText = "Status: Recording... (Speak now!)";
+
+      } catch (err) {
+        logDebug("Mic Error: " + err);
+        statusDict.innerText = "Status: Microphone access denied or error.";
+        statusDict.style.color = "red";
+      }
+    });
+
+    const savedText = localStorage.getItem("transcribedText");
+    if (savedText) {
+      output.innerText = savedText;
+    }
+
+    async function uploadAudio(file) {
+      statusDict.innerText = "Status: Uploading and Processing...";
+      statusDict.style.color = "yellow";
+      output.innerText = "Processing...";
+      logDebug("Starting upload for file: " + file.name);
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        logDebug("Sending POST request to http://127.0.0.1:8000/upload");
+        const response = await fetch("http://127.0.0.1:8000/upload", {
+          method: "POST",
+          body: formData
+        });
+
+        logDebug("Response status: " + response.status);
+
+        if (!response.ok) {
+          throw new Error("Server Error: " + response.status + " " + response.statusText);
+        }
+
+        const data = await response.json();
+        logDebug("Received Data: " + JSON.stringify(data));
+
+        statusDict.innerText = "Status: Success!";
+        statusDict.style.color = "lightgreen";
+
+        if (data.text) {
+          logDebug("SUCCESS! Found text in response.");
+          logDebug("Text content: " + data.text);
+
+          // ALERT ADDED HERE
+          alert("TRANSCRIPTION SUCCESS!\n\nText: " + data.text);
+
+          output.innerText = data.text;
+          output.style.color = "white"; // Force white text
+          output.style.display = "block"; // Force display
+
+          // Fallback verify
+          if (output.innerText !== data.text) {
+            logDebug("CRITICAL: innerText assignment failed!");
+          } else {
+            logDebug("UI updated successfully.");
+          }
+
+          localStorage.setItem("transcribedText", data.text);
+        } else {
+          output.innerText = "No text found in response.";
+          statusDict.innerText = "Status: Completed (Empty Response)";
+          statusDict.style.color = "orange";
+          logDebug("Data.text was empty or missing. Full data: " + JSON.stringify(data));
+        }
+
+      } catch (err) {
+        logDebug("Error caught: " + err);
+        statusDict.innerText = "Status: Error occurred (See Debug Log)";
+        statusDict.style.color = "red";
+        output.innerText = "Error Details: " + err.message;
+      }
+    }
+
+    async function handleUploadClick() {
+      if (!fileInput.files.length) {
+        alert("Please choose an audio file");
+        return;
+      }
+      await uploadAudio(fileInput.files[0]);
+    }
+
+    function clearText() {
+      if (confirm("Are you sure you want to remove the text?")) {
+        output.innerText = "No text yet.";
+        localStorage.removeItem("transcribedText");
+        statusDict.innerText = "Status: Cleared.";
+        statusDict.style.color = "white";
+        logDebug("Text cleared by user.");
+      }
+    }
+
+    // Removed form.addEventListener("submit") entirely to prevent reloads
+  </script>
+</body>
+
+</html>
