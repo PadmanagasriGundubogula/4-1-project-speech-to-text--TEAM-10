@@ -1,4 +1,4 @@
-# 🎙️ Speech Transcription App
+# 🎙️ Speech Transcription App - TEAM 10
 
 A modern web application for converting audio to text with intelligent question generation.
 
@@ -91,9 +91,9 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions on deploying to Ren
 
 MIT License - feel free to use this project!
 
-## 👤 Author
+## 👥 Team
 
-Created with ❤️ by [Your Name]
+**TEAM 10** - 4-1 Project
 
 ## 🙏 Acknowledgments
 
