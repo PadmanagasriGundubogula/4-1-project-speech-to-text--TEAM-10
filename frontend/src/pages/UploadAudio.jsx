@@ -1,317 +1,314 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Mic, Upload, FileAudio, Square, Trash2, CheckCircle, AlertCircle, Copy, Loader2 } from 'lucide-react';
+import { Mic, Upload, FileText, Trash2, Copy, Sparkles, Activity, Clock, Play, Maximize2, MoreHorizontal, AlertCircle, CheckCircle, Award } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function UploadAudio() {
-    const { api } = useAuth();
+    const { api, user } = useAuth();
+    const navigate = useNavigate();
     const [history, setHistory] = useState([]);
     const [transcription, setTranscription] = useState(null);
     const [questions, setQuestions] = useState([]);
     const [recording, setRecording] = useState(false);
+
+    // Status State with Type
     const [status, setStatus] = useState('');
-    const [statusType, setStatusType] = useState('info'); // info, success, error
+    const [statusType, setStatusType] = useState('info'); // 'info', 'success', 'error'
+
+    const [loading, setLoading] = useState(false);
     const [mediaRecorder, setMediaRecorder] = useState(null);
     const fileInputRef = useRef(null);
     const [dragActive, setDragActive] = useState(false);
 
-    useEffect(() => {
-        fetchHistory();
-    }, []);
+    useEffect(() => { fetchHistory(); }, []);
 
     const fetchHistory = async () => {
         try {
             const res = await api.get('/history');
             setHistory(res.data);
-        } catch (e) {
-            console.error("Failed to fetch history");
-        }
-    };
-
-    const handleUpload = async (event) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        await processFile(file);
-    };
-
-    const handleDrag = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.type === "dragenter" || e.type === "dragover") {
-            setDragActive(true);
-        } else if (e.type === "dragleave") {
-            setDragActive(false);
-        }
-    };
-
-    const handleDrop = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setDragActive(false);
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            await processFile(e.dataTransfer.files[0]);
-        }
+        } catch (e) { console.error("History fetch error", e); }
     };
 
     const processFile = async (file) => {
-        setStatus("Processing...");
+        setLoading(true);
+        setStatus("Uploading & Processing...");
         setStatusType("info");
+
         const formData = new FormData();
         formData.append('file', file);
-
         try {
             const res = await api.post('/upload', formData);
+            if (res.data.text && res.data.text.startsWith("Error:")) throw new Error(res.data.text);
+
             setTranscription(res.data.text);
             setQuestions(res.data.questions || []);
-            setStatus("Transcription Complete!");
+            setStatus("Success! Analysis Complete.");
             setStatusType("success");
             fetchHistory();
         } catch (e) {
-            setStatus(e.response?.data?.text || e.message);
+            console.error("Upload Error:", e);
+            setStatus(e.response?.data?.detail || e.message || "Upload Failed. Check backend console.");
             setStatusType("error");
+        } finally {
+            setLoading(false);
         }
     };
 
     const startRecording = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const recorder = new MediaRecorder(stream);
-            let chunks = [];
 
-            recorder.ondataavailable = e => chunks.push(e.data);
+            // Try to use a more widely supported MIME type
+            const types = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'audio/ogg;codecs=opus',
+                'audio/mp4',
+                'audio/wav'
+            ];
+
+            let mimeType = '';
+            for (const type of types) {
+                if (MediaRecorder.isTypeSupported(type)) {
+                    mimeType = type;
+                    break;
+                }
+            }
+
+            if (!mimeType) {
+                throw new Error("No supported audio recording format found in this browser.");
+            }
+
+            console.log("Using MIME type:", mimeType);
+            const recorder = new MediaRecorder(stream, { mimeType });
+
+            let chunks = [];
+            recorder.ondataavailable = e => {
+                if (e.data && e.data.size > 0) {
+                    chunks.push(e.data);
+                }
+            };
             recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'audio/wav' });
-                const file = new File([blob], "recording.wav", { type: "audio/wav" });
-                processFile(file);
+                try {
+                    const blob = new Blob(chunks, { type: mimeType });
+                    if (blob.size === 0) throw new Error("Recording failed: Empty audio data.");
+
+                    const extension = mimeType.includes('webm') ? 'webm' :
+                        mimeType.includes('ogg') ? 'ogg' :
+                            mimeType.includes('mp4') ? 'mp4' : 'wav';
+
+                    processFile(new File([blob], `recording.${extension}`, { type: mimeType }));
+                } catch (err) {
+                    console.error("Recording blob error:", err);
+                    setStatus("Error saving recording: " + err.message);
+                    setStatusType("error");
+                } finally {
+                    stream.getTracks().forEach(track => track.stop());
+                }
             };
 
-            recorder.start();
+            recorder.start(1000); // Collect data every second for reliability
             setMediaRecorder(recorder);
             setRecording(true);
-            setStatus("Recording in progress...");
+            setStatus("Recording Audio...");
             setStatusType("info");
         } catch (e) {
-            setStatus("Microphone access denied or error: " + e.message);
+            console.error("Recording error:", e);
+            setStatus(e.message || "Microphone access denied or not found.");
             setStatusType("error");
         }
     };
 
     const stopRecording = () => {
-        if (mediaRecorder) {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
-            setRecording(false);
         }
-    };
-
-    const copyToClipboard = () => {
-        if (transcription) {
-            navigator.clipboard.writeText(transcription);
-            setStatus("Copied to clipboard!");
-            setStatusType("success");
-            setTimeout(() => setStatus(""), 2000);
-        }
-    };
-
-    const deleteHistoryItem = async (id, event) => {
-        event.stopPropagation(); // Prevent clicking delete from selecting the item
-        try {
-            await api.delete(`/history/${id}`);
-            fetchHistory(); // Refresh the list
-            setStatus("Item deleted");
-            setStatusType("success");
-            setTimeout(() => setStatus(""), 2000);
-        } catch (e) {
-            setStatus("Failed to delete");
-            setStatusType("error");
-        }
+        setRecording(false);
     };
 
     return (
-        <div className="flex flex-col lg:flex-row h-[calc(100vh-64px)] overflow-hidden bg-gray-50">
-            {/* Sidebar (History) */}
-            <aside className="w-full lg:w-80 bg-white border-r border-gray-200 flex flex-col h-full z-10 shadow-sm">
-                <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-                    <h2 className="font-bold flex items-center gap-2 text-gray-800">
-                        <FileAudio className="text-blue-600" size={20} /> History
-                    </h2>
-                    <span className="text-xs font-medium px-2 py-1 bg-gray-100 rounded-full text-gray-500">{history.length}</span>
-                </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-                    {history.map((item) => (
-                        <div key={item.id}
-                            className="group p-4 bg-white rounded-xl hover:bg-blue-50 cursor-pointer transition border border-gray-100 hover:border-blue-200 shadow-sm hover:shadow-md relative"
-                        >
-                            <div onClick={() => setTranscription(item.text)}>
-                                <div className="flex justify-between items-start mb-1">
-                                    <p className="text-sm font-semibold truncate text-gray-800 w-3/4">{item.filename}</p>
-                                    <span className="text-[10px] text-gray-400 font-medium">{new Date(item.created_at).toLocaleDateString()}</span>
+        <div className="min-h-screen pt-28 pb-12 px-6 relative overflow-hidden">
+            {/* Background Blobs */}
+            <div className="absolute top-1/4 right-0 w-96 h-96 bg-purple-200/10 rounded-full blur-[100px] -z-10 animate-pulse-slow"></div>
+            <div className="absolute bottom-1/4 left-0 w-96 h-96 bg-pink-200/10 rounded-full blur-[100px] -z-10 animate-pulse-slow delay-100"></div>
+
+            <div className="relative z-10 max-w-7xl mx-auto grid lg:grid-cols-[300px_1fr] gap-8">
+
+                {/* --- LEFT COLUMN: HISTORY --- */}
+                <div className="space-y-6">
+                    <div className="glass-card p-6 h-[calc(100vh-140px)] flex flex-col sticky top-28 bg-white/80">
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-lg font-display font-bold text-gray-900 flex items-center gap-2">
+                                <Clock size={18} className="text-purple-400" /> Recent
+                            </h2>
+                            <span className="text-xs font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full border border-purple-100">{history.length}</span>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto custom-scrollbar -mx-2 px-2 space-y-3">
+                            {history.length === 0 ? (
+                                <div className="text-center text-gray-400 py-10">
+                                    <FileText size={32} className="mx-auto mb-2 opacity-20" />
+                                    <p className="text-sm font-sans">No files yet</p>
                                 </div>
-                                <p className="text-xs text-gray-500 line-clamp-2">{item.text.substring(0, 60)}...</p>
-                            </div>
-                            <button
-                                onClick={(e) => deleteHistoryItem(item.id, e)}
-                                className="absolute top-2 right-2 p-1.5 opacity-0 group-hover:opacity-100 transition bg-red-50 hover:bg-red-100 rounded-lg text-red-500 hover:text-red-600"
-                                title="Delete"
-                            >
-                                <Trash2 size={14} />
-                            </button>
+                            ) : (
+                                history.map((item) => (
+                                    <motion.div
+                                        key={item.id}
+                                        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                                        onClick={() => {
+                                            setTranscription(item.text);
+                                            // Assume history items might not have questions stored in this version, 
+                                            // but we'll try to preserve them if they exist
+                                            setQuestions(item.questions || []);
+                                        }}
+                                        className="p-4 rounded-2xl bg-white/50 border border-gray-100 hover:border-purple-200 hover:shadow-md cursor-pointer transition-all group"
+                                    >
+                                        <div className="flex justify-between items-start mb-2">
+                                            <h3 className="text-sm font-bold text-gray-700 truncate w-3/4 group-hover:text-purple-600 transition-colors">{item.filename}</h3>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); /* Delete Logic */ }}
+                                                className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-gray-500 line-clamp-2 font-sans">{item.text}</p>
+                                    </motion.div>
+                                ))
+                            )}
                         </div>
-                    ))}
-                    {history.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-40 text-gray-400">
-                            <FileAudio size={32} className="mb-2 opacity-50" />
-                            <p className="text-sm">No history yet.</p>
-                        </div>
-                    )}
+                    </div>
                 </div>
-            </aside>
 
-            {/* Main Content */}
-            <main className="flex-1 p-6 lg:p-10 flex flex-col overflow-y-auto w-full">
-                <div className="max-w-5xl mx-auto w-full flex flex-col h-full">
+                {/* --- RIGHT COLUMN: WORKSPACE --- */}
+                <div className="space-y-8">
 
-                    {/* Header */}
-                    <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    {/* Header Greetings */}
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                         <div>
-                            <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Transcription Studio</h1>
-                            <p className="text-gray-500 mt-1">Upload audio or record voice to generate text instantly.</p>
+                            <h1 className="text-3xl font-display font-bold text-gray-900 mb-1 leading-tight">Welcome back, {user?.username}</h1>
+                            <p className="text-gray-500 font-sans">Ready to capture some ideas today?</p>
                         </div>
 
-                        {status && (
-                            <div className={`px-4 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 animate-fade-in shadow-sm
-                                ${statusType === 'success' ? 'bg-green-50 text-green-700 border border-green-200' :
-                                    statusType === 'error' ? 'bg-red-50 text-red-700 border border-red-200' :
-                                        'bg-blue-50 text-blue-700 border border-blue-200'
-                                }`}>
-                                {statusType === 'success' ? <CheckCircle size={16} /> :
-                                    statusType === 'error' ? <AlertCircle size={16} /> :
-                                        <Loader2 size={16} className="animate-spin" />}
-                                {status}
-                            </div>
-                        )}
+                        {/* Status Alert Pill */}
+                        <AnimatePresence>
+                            {status && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.95 }}
+                                    className={`flex items-center gap-2 px-6 py-3 rounded-full text-sm font-bold shadow-sm border backdrop-blur-md ${statusType === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                        statusType === 'error' ? 'bg-red-50 text-red-700 border-red-200' :
+                                            'bg-purple-50 text-purple-700 border-purple-200'
+                                        }`}
+                                >
+                                    {statusType === 'success' ? <CheckCircle size={16} /> :
+                                        statusType === 'error' ? <AlertCircle size={16} /> :
+                                            <Activity size={16} className={loading ? "animate-spin" : ""} />}
+                                    {status}
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 min-h-0">
-                        {/* Input Area */}
-                        <div className="flex flex-col gap-6">
-                            <div
-                                className={`flex-1 border-2 border-dashed rounded-3xl flex flex-col items-center justify-center p-8 transition-all duration-200 ease-in-out cursor-pointer relative bg-white
-                                    ${dragActive
-                                        ? 'border-blue-500 bg-blue-50/50 scale-[1.02] shadow-lg'
-                                        : 'border-gray-200 hover:border-blue-400 hover:shadow-md'
-                                    }`}
-                                onDragEnter={handleDrag}
-                                onDragLeave={handleDrag}
-                                onDragOver={handleDrag}
-                                onDrop={handleDrop}
-                                onClick={() => fileInputRef.current?.click()}
-                            >
-                                <input
-                                    ref={fileInputRef}
-                                    type="file"
-                                    accept="audio/*"
-                                    onChange={handleUpload}
-                                    className="hidden"
-                                />
-                                <div className="p-4 bg-blue-50 rounded-full mb-4 group-hover:bg-blue-100 transition">
-                                    <Upload className={`w-10 h-10 text-blue-600 ${dragActive ? 'animate-bounce' : ''}`} />
-                                </div>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-1">Upload Audio File</h3>
-                                <p className="text-sm text-gray-500 mb-4 text-center">Drag & drop or click to browse<br />(MP3, WAV, M4A supported)</p>
-                            </div>
-
-                            <div className="flex items-center gap-4 px-2">
-                                <div className="h-px bg-gray-200 flex-1"></div>
-                                <span className="text-gray-400 text-xs font-bold uppercase tracking-widest">OR RECORD</span>
-                                <div className="h-px bg-gray-200 flex-1"></div>
-                            </div>
-
+                    {/* Input Area */}
+                    <div className="grid md:grid-cols-2 gap-6">
+                        {/* Record Card */}
+                        <div className="glass-card p-8 flex flex-col items-center justify-center text-center hover:border-purple-300 transition-all duration-300 group relative overflow-hidden">
+                            <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-pink-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                             <button
                                 onClick={recording ? stopRecording : startRecording}
-                                className={`w-full py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-200 shadow-md hover:shadow-xl transform hover:-translate-y-0.5 ${recording
-                                    ? 'bg-red-500 hover:bg-red-600 text-white ring-4 ring-red-200'
-                                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white'
-                                    }`}
+                                className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 transition-all duration-500 relative z-10 ${recording ? 'bg-red-500 shadow-xl shadow-red-500/40 scale-110 animate-pulse' : 'bg-gray-900 shadow-lg group-hover:bg-gradient-to-br group-hover:from-purple-600 group-hover:to-pink-600'}`}
                             >
-                                {recording
-                                    ? <><Square size={24} fill="currentColor" /> Stop Recording</>
-                                    : <><Mic size={24} /> Start Recording</>
-                                }
+                                <Mic size={32} className="text-white" />
                             </button>
+                            <h3 className="text-lg font-display font-bold text-gray-900 mb-1 relative z-10">{recording ? 'Recording...' : 'Record Voice'}</h3>
+                            <p className="text-sm text-gray-500 font-sans relative z-10">Click to start capturing</p>
                         </div>
 
-                        {/* Output Area */}
-                        <div className="bg-white rounded-3xl shadow-sm border border-gray-200 flex flex-col overflow-hidden h-full max-h-[600px]">
-                            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                                <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                                    <FileAudio className="text-indigo-500" size={18} /> Transcription Result
-                                </h3>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={copyToClipboard}
-                                        disabled={!transcription}
-                                        className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-blue-600 transition disabled:opacity-30 disabled:cursor-not-allowed"
-                                        title="Copy to Clipboard"
-                                    >
-                                        <Copy size={18} />
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            setTranscription(null);
-                                            setQuestions([]);
-                                        }}
-                                        disabled={!transcription}
-                                        className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-red-500 transition disabled:opacity-30 disabled:cursor-not-allowed"
-                                        title="Clear"
-                                    >
-                                        <Trash2 size={18} />
-                                    </button>
-                                </div>
+                        {/* Upload Card */}
+                        <div
+                            className={`glass-card p-8 flex flex-col items-center justify-center text-center border-dashed border-2 cursor-pointer transition-all duration-300 ${dragActive ? 'border-purple-500 bg-purple-50/50' : 'border-gray-200 hover:border-purple-300 group'}`}
+                            onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                            onDragLeave={() => setDragActive(false)}
+                            onDrop={(e) => { e.preventDefault(); setDragActive(false); if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); }}
+                            onClick={() => fileInputRef.current.click()}
+                        >
+                            <div className="w-20 h-20 rounded-full bg-gray-50 flex items-center justify-center mb-6 text-gray-400 group-hover:text-purple-600 group-hover:bg-purple-50 transition-all duration-300">
+                                <Upload size={32} />
                             </div>
-                            <div className="flex-1 p-6 overflow-y-auto bg-white">
-                                {transcription ? (
-                                    <div className="prose prose-gray max-w-none">
-                                        <p className="text-gray-700 leading-relaxed text-lg whitespace-pre-wrap">{transcription}</p>
-                                    </div>
-                                ) : (
-                                    <div className="h-full flex flex-col items-center justify-center text-gray-300">
-                                        <FileAudio size={48} className="mb-4 opacity-20" />
-                                        <p>Transcription will appear here...</p>
-                                    </div>
-                                )}
-                            </div>
+                            <h3 className="text-lg font-display font-bold text-gray-900 mb-1">Upload Audio</h3>
+                            <p className="text-sm text-gray-500 font-sans">Drag & drop or click to browse</p>
+                            <input ref={fileInputRef} type="file" className="hidden" accept="audio/*" onChange={(e) => e.target.files[0] && processFile(e.target.files[0])} />
                         </div>
                     </div>
 
-                    {/* Questions Section - Full Width Below */}
-                    {questions.length > 0 && (
-                        <div className="col-span-1 lg:col-span-2 bg-white rounded-3xl shadow-sm border border-gray-200 p-6">
-                            <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                <svg className="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                                Relevant Questions
-                            </h3>
-                            <div className="grid md:grid-cols-2 gap-3">
-                                {questions.map((question, index) => (
-                                    <div
-                                        key={index}
-                                        className="p-4 bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl border border-purple-100 hover:border-purple-300 transition group cursor-pointer"
-                                    >
-                                        <div className="flex items-start gap-3">
-                                            <span className="flex-shrink-0 w-6 h-6 bg-purple-500 text-white rounded-full flex items-center justify-center text-xs font-bold">
-                                                {index + 1}
-                                            </span>
-                                            <p className="text-gray-700 text-sm leading-relaxed group-hover:text-gray-900 transition">
-                                                {question}
-                                            </p>
-                                        </div>
-                                    </div>
-                                ))}
+                    {/* Results Area */}
+                    <div className="glass-card min-h-[400px] flex flex-col relative overflow-hidden backdrop-blur-2xl">
+                        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white/40">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg border border-purple-100 text-purple-600"><Sparkles size={18} /></div>
+                                <span className="font-display font-bold text-gray-900">Transcription Result</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => navigator.clipboard.writeText(transcription)} disabled={!transcription} className="p-2 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-all"><Copy size={18} /></button>
+                                <button className="p-2 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-all"><Maximize2 size={18} /></button>
                             </div>
                         </div>
-                    )}
+
+                        <div className="flex-1 p-8 bg-white/10">
+                            {loading ? (
+                                <div className="h-full flex flex-col items-center justify-center text-gray-400 animate-pulse">
+                                    <Activity size={48} className="mb-4 text-purple-400" />
+                                    <p className="font-display font-semibold">Processing audio intelligence...</p>
+                                </div>
+                            ) : transcription ? (
+                                <div className="prose prose-purple max-w-none">
+                                    <p className="text-lg text-gray-700 leading-relaxed whitespace-pre-wrap font-sans">{transcription}</p>
+
+                                    {questions.length > 0 && (
+                                        <div className="mt-8 p-6 bg-gradient-to-br from-purple-50/50 to-pink-50/50 rounded-2xl border border-purple-100">
+                                            <h4 className="text-purple-900 font-display font-bold mb-4 flex items-center gap-2"><Sparkles size={16} className="text-purple-500" /> Suggested Actions</h4>
+                                            <ul className="space-y-2">
+                                                {questions.map((q, i) => (
+                                                    <li key={i} className="flex flex-col gap-1 p-3 rounded-xl bg-white/40 border border-purple-100">
+                                                        <div className="flex gap-2 text-purple-900 font-sans font-bold">
+                                                            <span className="text-purple-400">Q{i + 1}:</span> {q.question || q}
+                                                        </div>
+                                                        {q && q.options && (
+                                                            <div className="text-xs font-bold text-emerald-600 ml-7">
+                                                                Answer: {q.options[q.answer]}
+                                                            </div>
+                                                        )}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                            <div className="mt-8 flex justify-center">
+                                                <button
+                                                    onClick={() => navigate('/quiz', { state: { questions } })}
+                                                    className="px-8 py-4 bg-gray-900 text-white rounded-full font-bold flex items-center gap-2 hover:bg-purple-600 hover:scale-105 transition-all shadow-xl shadow-purple-500/20 group"
+                                                >
+                                                    <Award size={20} className="group-hover:rotate-12 transition-transform" />
+                                                    Go to Quiz
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="h-full flex flex-col items-center justify-center text-gray-300">
+                                    <div className="w-24 h-24 rounded-3xl bg-gray-50 flex items-center justify-center mb-6 transform rotate-12 shadow-inner">
+                                        <FileText size={40} className="text-gray-200" />
+                                    </div>
+                                    <p className="text-xl font-display font-bold text-gray-400">No content generated yet</p>
+                                    <p className="text-sm text-gray-400 mt-1 font-sans">Upload or record audio to get started</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
-            </main>
+            </div>
         </div>
     );
 }

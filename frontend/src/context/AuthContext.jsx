@@ -60,11 +60,15 @@ export const AuthProvider = ({ children }) => {
     };
 
     const register = async (username, email, password) => {
-        const formData = new FormData();
-        formData.append('username', username);
-        formData.append('email', email);
-        formData.append('password', password);
-        await api.post('/register', formData);
+        const params = new URLSearchParams();
+        params.append('username', username);
+        params.append('email', email);
+        params.append('password', password);
+        await api.post('/register', params, {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+        });
     };
 
     const logout = () => {
